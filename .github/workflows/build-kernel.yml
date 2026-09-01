@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
-      # Keep ccache between runs (same branch); helps if you re-run with/without disable_module_sig
       CCACHE_DIR: /home/runner/.ccache
     steps:
       - name: Checkout this repo (for workflow file)
@@ -35,18 +34,23 @@ jobs:
         run: |
           mkdir -p workspace
           cd workspace
-          # Android 14 GKI kernel source (6.1 LTS) — this is the same baseline your vivo iQOO Dimensity 9300 uses
+          # Android 14 GKI kernel source (6.1 LTS)
           git clone --depth 1 --branch android14-6.1 \
             https://android.googlesource.com/kernel/common
-          # Build system + pinned Android clang + binutils bootstrap
+          # Build system + pinned Android clang + binutils bootstrap (use main branch)
           git clone --depth 1 \
             https://android.googlesource.com/kernel/build
+          echo "=== workspace contents ==="
+          ls -la
+          echo "=== build/ contents ==="
+          ls -la build/
+          echo "=== common/ contents ==="
+          ls -la common/
 
       - name: Optionally disable module signature (demo how cheat vendor does it)
         if: ${{ inputs.disable_module_sig }}
         run: |
           cd workspace
-          # These two lines replicate what the cheat vendor did: disable forced module signing
           echo 'CONFIG_MODULE_SIG=n'           >> common/arch/arm64/configs/gki_defconfig
           echo 'CONFIG_MODULE_SIG_FORCE=n'     >> common/arch/arm64/configs/gki_defconfig
           echo 'CONFIG_LOCALVERSION="-demo-build"' >> common/arch/arm64/configs/gki_defconfig
@@ -56,26 +60,33 @@ jobs:
       - name: Build GKI kernel using Google's official build.sh
         run: |
           cd workspace
-          # Per Android docs: run build.sh from the parent directory that contains both build/ and common/
+          # Find build.sh (could be in build/ or build/scripts/)
+          if [ -f build/build.sh ]; then
+            BUILD_SCRIPT=build/build.sh
+          elif [ -f build/scripts/build.sh ]; then
+            BUILD_SCRIPT=build/scripts/build.sh
+          else
+            echo "ERROR: build.sh not found"
+            find build -name "*.sh" -type f
+            exit 1
+          fi
           export BUILD_CONFIG=common/build.config.gki.aarch64
-          ./build/build.sh
+          ./$BUILD_SCRIPT
 
       - name: Verify build output & extract version info
         run: |
           cd workspace
           echo "=== dist directories ==="
-          find out -type d -name dist
+          find out -type d -name dist 2>/dev/null || true
           echo "=== key artifacts ==="
-          find out -type f \( -name "Image*" -o -name "vmlinux" -o -name "System.map" -o -name "Module.symvers" \) | head -20
-          # Extract the exact kernel version string (what /proc/version shows)
+          find out -type f \( -name "Image*" -o -name "vmlinux" -o -name "System.map" -o -name "Module.symvers" \) 2>/dev/null | head -20
           if [ -f out/android14-6.1/dist/vmlinux ]; then
             echo "=== Kernel version from vmlinux ==="
             strings out/android14-6.1/dist/vmlinux | grep -E 'Linux version' | head -1
           else
             echo "=== Fallback: check Image ==="
-            strings out/android14-6.1/dist/Image | grep -E 'Linux version' | head -1
+            strings out/android14-6.1/dist/Image | grep -E 'Linux version' | head-1
           fi
-          # Show vermagic if present
           echo "=== vermagic (if module build) ==="
           find out -name "vermagic*" -exec cat {} \; 2>/dev/null || true
 

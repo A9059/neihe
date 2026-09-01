@@ -1,0 +1,89 @@
+name: Build 6.1 GKI Kernel (aarch64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      disable_module_sig:
+        description: 'Disable CONFIG_MODULE_SIG / FORCE (demo cheat vendor style)'
+        type: boolean
+        default: false
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build GKI aarch64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      # Keep ccache between runs (same branch); helps if you re-run with/without disable_module_sig
+      CCACHE_DIR: /home/runner/.ccache
+    steps:
+      - name: Checkout this repo (for workflow file)
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git curl flex bison bc \
+            build-essential libssl-dev libncurses-dev libelf-dev \
+            cpio lz4 xz-utils zstd device-tree-compiler lzop \
+            python3 python3-pip ninja-build ccache
+
+      - name: Set up GKI kernel sources (official layout)
+        run: |
+          mkdir -p workspace
+          cd workspace
+          # Android 14 GKI kernel source (6.1 LTS) — this is the same baseline your vivo iQOO Dimensity 9300 uses
+          git clone --depth 1 --branch android14-6.1 \
+            https://android.googlesource.com/kernel/common
+          # Build system + pinned Android clang + binutils bootstrap
+          git clone --depth 1 --branch android14-6.1 \
+            https://android.googlesource.com/kernel/build
+
+      - name: Optionally disable module signature (demo how cheat vendor does it)
+        if: ${{ inputs.disable_module_sig }}
+        run: |
+          cd workspace
+          # These two lines replicate what the cheat vendor did: disable forced module signing
+          echo 'CONFIG_MODULE_SIG=n'           >> common/arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_MODULE_SIG_FORCE=n'     >> common/arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_LOCALVERSION="-demo-build"' >> common/arch/arm64/configs/gki_defconfig
+          echo "=== Modified gki_defconfig tail ==="
+          tail -5 common/arch/arm64/configs/gki_defconfig
+
+      - name: Build GKI kernel using Google's official build.sh
+        run: |
+          cd workspace
+          # Per Android docs: run build.sh from the parent directory that contains both build/ and common/
+          export BUILD_CONFIG=common/build.config.gki.aarch64
+          ./build/build.sh
+
+      - name: Verify build output & extract version info
+        run: |
+          cd workspace
+          echo "=== dist directories ==="
+          find out -type d -name dist
+          echo "=== key artifacts ==="
+          find out -type f \( -name "Image*" -o -name "vmlinux" -o -name "System.map" -o -name "Module.symvers" \) | head -20
+          # Extract the exact kernel version string (what /proc/version shows)
+          if [ -f out/android14-6.1/dist/vmlinux ]; then
+            echo "=== Kernel version from vmlinux ==="
+            strings out/android14-6.1/dist/vmlinux | grep -E 'Linux version' | head -1
+          else
+            echo "=== Fallback: check Image ==="
+            strings out/android14-6.1/dist/Image | grep -E 'Linux version' | head -1
+          fi
+          # Show vermagic if present
+          echo "=== vermagic (if module build) ==="
+          find out -name "vermagic*" -exec cat {} \; 2>/dev/null || true
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gki-6.1-kernel${{ inputs.disable_module_sig && '-no-sig' || '' }}
+          path: |
+            workspace/out/**/dist/*
+            workspace/out/**/vmlinux
+          if-no-files-found: error

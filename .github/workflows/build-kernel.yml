@@ -14,9 +14,11 @@ jobs:
   build:
     name: Build GKI aarch64
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       CCACHE_DIR: /home/runner/.ccache
+      # Bazel 需要的 Java
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
     steps:
       - name: Checkout this repo (for workflow file)
         uses: actions/checkout@v4
@@ -29,7 +31,7 @@ jobs:
             build-essential libssl-dev libncurses-dev libelf-dev \
             cpio lz4 xz-utils zstd device-tree-compiler lzop \
             python3 python3-pip ninja-build ccache \
-            openjdk-17-jdk-headless
+            openjdk-17-jdk-headless unzip zip
 
       - name: Set up GKI kernel sources (official layout)
         run: |
@@ -56,10 +58,17 @@ jobs:
           echo "=== Modified gki_defconfig tail ==="
           tail -5 common/arch/arm64/configs/gki_defconfig
 
+      - name: Bootstrap kleaf prebuilts (download Bazel, Python, toolchains)
+        run: |
+          cd workspace
+          # The kleaf/bazel.sh script bootstraps prebuilts on first run.
+          # Run a dummy command to trigger bootstrap (fetch a simple target).
+          ./build/kleaf/bazel.sh fetch //common:kernel_aarch64_dist 2>&1 | tail -30
+
       - name: Build GKI kernel using Google's kleaf (Bazel)
         run: |
           cd workspace
-          # New build system: kleaf/bazel.sh with config fragment
+          # Actual build
           ./build/kleaf/bazel.sh build \
             --config=common/build.config.gki.aarch64 \
             //common:kernel_aarch64_dist

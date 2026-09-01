@@ -12,17 +12,16 @@ on:
 
 jobs:
   build:
-    name: Build GKI aarch64
+    name: Build GKI aarch64 (make + clang)
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 180
     env:
       CCACHE_DIR: /home/runner/.ccache
-      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
     steps:
-      - name: Checkout this repo (for workflow file)
+      - name: Checkout this repo
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -30,74 +29,75 @@ jobs:
             build-essential libssl-dev libncurses-dev libelf-dev \
             cpio lz4 xz-utils zstd device-tree-compiler lzop \
             python3 python3-pip ninja-build ccache \
-            openjdk-17-jdk-headless unzip zip
+            clang-17 lld-17 llvm-17
 
-      - name: Set up GKI kernel sources (official layout)
+      - name: Set up GKI kernel source
         run: |
           mkdir -p workspace
           cd workspace
           git clone --depth 1 --branch android14-6.1 \
             https://android.googlesource.com/kernel/common
-          git clone --depth 1 \
-            https://android.googlesource.com/kernel/build
-          echo "=== workspace contents ==="
-          ls -la
-          echo "=== common/ has build.config.gki.aarch64? ==="
-          ls -la common/build.config.gki.aarch64
 
-      - name: Optionally disable module signature (demo how cheat vendor does it)
+      - name: Optionally disable module signature (demo cheat vendor style)
         if: ${{ inputs.disable_module_sig }}
         run: |
-          cd workspace
-          echo 'CONFIG_MODULE_SIG=n'           >> common/arch/arm64/configs/gki_defconfig
-          echo 'CONFIG_MODULE_SIG_FORCE=n'     >> common/arch/arm64/configs/gki_defconfig
-          echo 'CONFIG_LOCALVERSION="-demo-build"' >> common/arch/arm64/configs/gki_defconfig
+          cd workspace/common
+          echo 'CONFIG_MODULE_SIG=n'           >> arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_MODULE_SIG_FORCE=n'     >> arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_LOCALVERSION="-demo-build"' >> arch/arm64/configs/gki_defconfig
           echo "=== Modified gki_defconfig tail ==="
-          tail -5 common/arch/arm64/configs/gki_defconfig
+          tail -5 arch/arm64/configs/gki_defconfig
 
-      - name: Bootstrap kleaf prebuilts (trigger toolchain download)
+      - name: Build kernel with clang (LLVM=1)
         run: |
-          cd workspace
-          # First run: trigger bootstrap by asking for version
-          ./build/kleaf/bazel.sh version 2>&1 | tail -30
-
-      - name: Build GKI kernel using Google's kleaf (Bazel)
-        run: |
-          cd workspace
-          # Actual build
-          ./build/kleaf/bazel.sh build \
-            --config=common/build.config.gki.aarch64 \
-            //common:kernel_aarch64_dist
+          cd workspace/common
+          export PATH="/usr/lib/llvm-17/bin:$PATH"
+          export LLVM=1
+          export LLVM_IAS=1
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export READELF=llvm-readelf
+          export STRIP=llvm-strip
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabihf-
+          
+          make gki_defconfig
+          make -j$(nproc)
 
       - name: Verify build output & extract version info
         run: |
-          cd workspace
-          echo "=== dist directories ==="
-          find bazel-out -type d -name dist 2>/dev/null || true
-          find out -type d -name dist 2>/dev/null || true
+          cd workspace/common
           echo "=== key artifacts ==="
-          find bazel-out out -type f \( -name "Image*" -o -name "vmlinux" -o -name "System.map" -o -name "Module.symvers" \) 2>/dev/null | head -20
-          VMLINUX=$(find bazel-out out -name "vmlinux" -type f 2>/dev/null | head -1)
-          if [ -n "$VMLINUX" ]; then
-            echo "=== Kernel version from vmlinux ==="
-            strings "$VMLINUX" | grep -E 'Linux version' | head -1
-          else
-            IMAGE=$(find bazel-out out -name "Image" -type f 2>/dev/null | head -1)
-            if [ -n "$IMAGE" ]; then
-              echo "=== Fallback: check Image ==="
-              strings "$IMAGE" | grep -E 'Linux version' | head -1
-            fi
-          fi
-          echo "=== vermagic (if module build) ==="
-          find bazel-out out -name "vermagic*" -exec cat {} \; 2>/dev/null || true
+          ls -la arch/arm64/boot/Image* 2>/dev/null || true
+          ls -la vmlinux 2>/dev/null || true
+          ls -la System.map 2>/dev/null || true
+          echo "=== Kernel version ==="
+          strings vmlinux 2>/dev/null | grep -E 'Linux version' | head -1 || \
+          strings arch/arm64/boot/Image 2>/dev/null | grep -E 'Linux version' | head -1
+          echo "=== vermagic ==="
+          find . -name "vermagic*" -exec cat {} \; 2>/dev/null || true
+
+      - name: Package artifacts (simulate boot.img kernel)
+        run: |
+          cd workspace/common
+          mkdir -p ../dist
+          cp arch/arm64/boot/Image ../dist/Image
+          cp arch/arm64/boot/Image.gz ../dist/Image.gz 2>/dev/null || gzip -c arch/arm64/boot/Image > ../dist/Image.gz
+          cp arch/arm64/boot/Image.lz4 ../dist/Image.lz4 2>/dev/null || lz4 -c arch/arm64/boot/Image > ../dist/Image.lz4
+          cp vmlinux ../dist/vmlinux 2>/dev/null || true
+          cp System.map ../dist/System.map 2>/dev/null || true
+          cp Module.symvers ../dist/Module.symvers 2>/dev/null || true
+          echo "=== dist contents ==="
+          ls -la ../dist/
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
           name: gki-6.1-kernel${{ inputs.disable_module_sig && '-no-sig' || '' }}
           path: |
-            workspace/bazel-out/**/dist/*
-            workspace/out/**/dist/*
-            workspace/bazel-out/**/vmlinux
-            workspace/out/**/vmlinux
+            workspace/dist/*
           if-no-files-found: error

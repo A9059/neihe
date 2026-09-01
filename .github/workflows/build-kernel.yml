@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       disable_module_sig:
-        description: 'Disable CONFIG_MODULE_SIG / FORCE (demo cheat vendor style)'
+        description: 'Disable CONFIG_MODULE_SIG_FORCE (cheat vendor style)'
         type: boolean
-        default: false
+        default: true   # 默认就开，直接出过签名版
   push:
     branches: [ main ]
 
@@ -18,18 +18,16 @@ jobs:
     env:
       CCACHE_DIR: /home/runner/.ccache
     steps:
-      - name: Checkout this repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git curl flex bison bc \
-            build-essential libssl-dev libncurses-dev libelf-dev \
-            cpio lz4 xz-utils zstd device-tree-compiler lzop \
-            python3 python3-pip ninja-build ccache \
-            clang-17 lld-17 llvm-17
+            git curl flex bison bc build-essential libssl-dev \
+            libncurses-dev libelf-dev cpio lz4 xz-utils zstd \
+            device-tree-compiler lzop python3 python3-pip \
+            ninja-build ccache clang-17 lld-17 llvm-17
 
       - name: Set up GKI kernel source
         run: |
@@ -38,66 +36,41 @@ jobs:
           git clone --depth 1 --branch android14-6.1 \
             https://android.googlesource.com/kernel/common
 
-      - name: Optionally disable module signature (demo cheat vendor style)
+      - name: Disable module signature (THE CORE TRICK)
         if: ${{ inputs.disable_module_sig }}
         run: |
           cd workspace/common
-          echo 'CONFIG_MODULE_SIG=n'           >> arch/arm64/configs/gki_defconfig
-          echo 'CONFIG_MODULE_SIG_FORCE=n'     >> arch/arm64/configs/gki_defconfig
-          echo 'CONFIG_LOCALVERSION="-demo-build"' >> arch/arm64/configs/gki_defconfig
-          echo "=== Modified gki_defconfig tail ==="
+          echo 'CONFIG_MODULE_SIG=n' >> arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_MODULE_SIG_FORCE=n' >> arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_LOCALVERSION="-demo-cheat-build"' >> arch/arm64/configs/gki_defconfig
           tail -5 arch/arm64/configs/gki_defconfig
 
       - name: Build kernel with clang (LLVM=1)
         run: |
           cd workspace/common
           export PATH="/usr/lib/llvm-17/bin:$PATH"
-          export LLVM=1
-          export LLVM_IAS=1
-          export CC=clang
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export READELF=llvm-readelf
-          export STRIP=llvm-strip
+          export LLVM=1 LLVM_IAS=1
+          export CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
+          export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump
+          export READELF=llvm-readelf STRIP=llvm-strip
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_COMPAT=arm-linux-gnueabihf-
-          
           make gki_defconfig
           make -j$(nproc)
 
-      - name: Verify build output & extract version info
-        run: |
-          cd workspace/common
-          echo "=== key artifacts ==="
-          ls -la arch/arm64/boot/Image* 2>/dev/null || true
-          ls -la vmlinux 2>/dev/null || true
-          ls -la System.map 2>/dev/null || true
-          echo "=== Kernel version ==="
-          strings vmlinux 2>/dev/null | grep -E 'Linux version' | head -1 || \
-          strings arch/arm64/boot/Image 2>/dev/null | grep -E 'Linux version' | head -1
-          echo "=== vermagic ==="
-          find . -name "vermagic*" -exec cat {} \; 2>/dev/null || true
-
-      - name: Package artifacts (simulate boot.img kernel)
+      - name: Package artifacts
         run: |
           cd workspace/common
           mkdir -p ../dist
-          cp arch/arm64/boot/Image ../dist/Image
-          cp arch/arm64/boot/Image.gz ../dist/Image.gz 2>/dev/null || gzip -c arch/arm64/boot/Image > ../dist/Image.gz
-          cp arch/arm64/boot/Image.lz4 ../dist/Image.lz4 2>/dev/null || lz4 -c arch/arm64/boot/Image > ../dist/Image.lz4
-          cp vmlinux ../dist/vmlinux 2>/dev/null || true
-          cp System.map ../dist/System.map 2>/dev/null || true
-          cp Module.symvers ../dist/Module.symvers 2>/dev/null || true
-          echo "=== dist contents ==="
+          cp arch/arm64/boot/Image ../dist/
+          cp arch/arm64/boot/Image.gz ../dist/ 2>/dev/null || gzip -c arch/arm64/boot/Image > ../dist/Image.gz
+          lz4 -c arch/arm64/boot/Image > ../dist/Image.lz4
+          cp vmlinux ../dist/ 2>/dev/null || true
+          cp System.map ../dist/ 2>/dev/null || true
           ls -la ../dist/
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gki-6.1-kernel${{ inputs.disable_module_sig && '-no-sig' || '' }}
-          path: |
-            workspace/dist/*
-          if-no-files-found: error
+          name: gki-6.1-kernel-cheat
+          path: workspace/dist/*

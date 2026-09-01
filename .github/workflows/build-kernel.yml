@@ -17,7 +17,6 @@ jobs:
     timeout-minutes: 240
     env:
       CCACHE_DIR: /home/runner/.ccache
-      # Bazel 需要的 Java
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
     steps:
       - name: Checkout this repo (for workflow file)
@@ -37,10 +36,8 @@ jobs:
         run: |
           mkdir -p workspace
           cd workspace
-          # Android 14 GKI kernel source (6.1 LTS)
           git clone --depth 1 --branch android14-6.1 \
             https://android.googlesource.com/kernel/common
-          # Build system (kleaf/Bazel) - use main branch
           git clone --depth 1 \
             https://android.googlesource.com/kernel/build
           echo "=== workspace contents ==="
@@ -58,12 +55,11 @@ jobs:
           echo "=== Modified gki_defconfig tail ==="
           tail -5 common/arch/arm64/configs/gki_defconfig
 
-      - name: Bootstrap kleaf prebuilts (download Bazel, Python, toolchains)
+      - name: Bootstrap kleaf prebuilts (trigger toolchain download)
         run: |
           cd workspace
-          # The kleaf/bazel.sh script bootstraps prebuilts on first run.
-          # Run a dummy command to trigger bootstrap (fetch a simple target).
-          ./build/kleaf/bazel.sh fetch //common:kernel_aarch64_dist 2>&1 | tail -30
+          # First run: trigger bootstrap by asking for version
+          ./build/kleaf/bazel.sh version 2>&1 | tail -30
 
       - name: Build GKI kernel using Google's kleaf (Bazel)
         run: |
@@ -81,7 +77,6 @@ jobs:
           find out -type d -name dist 2>/dev/null || true
           echo "=== key artifacts ==="
           find bazel-out out -type f \( -name "Image*" -o -name "vmlinux" -o -name "System.map" -o -name "Module.symvers" \) 2>/dev/null | head -20
-          # Extract kernel version string
           VMLINUX=$(find bazel-out out -name "vmlinux" -type f 2>/dev/null | head -1)
           if [ -n "$VMLINUX" ]; then
             echo "=== Kernel version from vmlinux ==="

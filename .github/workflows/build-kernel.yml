@@ -39,7 +39,7 @@ jobs:
           git clone --depth 1 --branch android14-6.1 \
             https://android.googlesource.com/kernel/common
           # Build system + pinned Android clang + binutils bootstrap
-          git clone --depth 1 --branch android14-6.1 \
+          git clone --depth 1 \
             https://android.googlesource.com/kernel/build
 
       - name: Optionally disable module signature (demo how cheat vendor does it)
